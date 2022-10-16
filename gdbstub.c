@@ -45,6 +45,7 @@ int dbg_read(char *buf, size_t buf_len, size_t len);
 
 /* String processing helper functions */
 int dbg_strlen(const char *ch);
+int dbg_strcmp(const char *ch1, const char *ch2);
 int dbg_is_printable_char(char ch);
 char dbg_get_digit(int val);
 int dbg_get_val(char digit, int base);
@@ -81,17 +82,44 @@ int dbg_step(void);
 /*
  * Get null-terminated string length.
  */
-int dbg_strlen(const char *ch)
+int dbg_strlen(const char *s)
 {
 	int len;
 
 	len = 0;
-	while (*ch++) {
+	while (*s++) {
 		len += 1;
 	}
 
 	return len;
 }
+
+int dbg_strcmp(const char *s1, const char *s2)
+{
+  while ((*s1 != 0) && (*s2 != 0)) {
+    if (*s1 < *s2) {
+      return -1;
+    } else if (*s1 > *s2) {
+      return 1;
+    }
+    s1++;
+    s2++;
+  }
+  return 0;
+}
+
+char *dbg_strcpy(char *dest, const char *src)
+{
+  size_t i;
+
+  for (i = 0; src[i] != '\0'; i++)
+    dest[i] = src[i];
+  dest[i] = '\0';
+
+  return dest;
+}
+
+
 
 /*
  * Get integer value for a string representation.
@@ -164,6 +192,35 @@ int dbg_strtol(const char *str, size_t len, int base, const char **endptr)
 	value *= sign;
 
 	return value;
+}
+
+char *dbg_itoa(int value, char *str, int radix)
+{
+  int negative = (value < 0) ? 1 : 0;
+  int v = (negative) ? -value : value;
+  const char *guard = (negative) ? (str + 1) : str;
+  char *p = str;
+  while (v >= radix) {
+    v /= radix;
+    p++;
+  }
+  if (negative) {
+    p += 2;
+  } else {
+    p += 1;
+  }
+  // fill the characters
+  *p = '\0'; // termitate char
+  v = value;
+  do {
+    *(--p) = digits[v % radix];
+    v /= radix;
+  } while (p != guard);
+
+  if (negative) {
+    *str = '-';
+  }
+  return str;
 }
 
 /*
@@ -641,7 +698,7 @@ int dbg_send_conmsg_packet(char *buf, size_t buf_len, const char *msg)
 }
 
 /*
- * Send a signal packet (S AA).
+ * Send a signal packet (T AA thread:id).
  */
 int dbg_send_signal_packet(char *buf, size_t buf_len, char signal)
 {
@@ -653,13 +710,15 @@ int dbg_send_signal_packet(char *buf, size_t buf_len, char signal)
 		return EOF;
 	}
 
-	buf[0] = 'S';
+	buf[0] = 'T';
 	status = dbg_enc_hex(&buf[1], buf_len-1, &signal, 1);
 	if (status == EOF) {
 		return EOF;
 	}
 	size = 1 + status;
-	return dbg_send_packet(buf, size);
+  dbg_strcpy(&buf[size], "thread:p1.");
+  dbg_itoa(1, &buf[dbg_strlen(buf)], 10);
+	return dbg_send_packet(buf, dbg_strlen(buf));
 }
 
 /*
@@ -742,11 +801,12 @@ int dbg_read(char *buf, size_t buf_len, size_t len)
 int dbg_main(struct dbg_state *state)
 {
 	address     addr;
-	char        pkt_buf[256];
+	char        pkt_buf[1024];
 	int         status;
 	size_t      length;
 	size_t      pkt_len;
-	const char *ptr_next;
+	const char  *rd_ptr;
+	char        *wr_ptr;
 
 	dbg_send_signal_packet(pkt_buf, sizeof(pkt_buf), state->signum);
 
@@ -762,32 +822,31 @@ int dbg_main(struct dbg_state *state)
 			continue;
 		}
 
-		ptr_next = pkt_buf;
-
+		rd_ptr = pkt_buf;
 		/*
 		 * Handle one letter commands
 		 */
 		switch (pkt_buf[0]) {
 
-		/* Calculate remaining space in packet from ptr_next position. */
-		#define token_remaining_buf (pkt_len-(ptr_next-pkt_buf))
+		/* Calculate remaining space in packet from rd_ptr position. */
+		#define token_remaining_buf (pkt_len-(rd_ptr-pkt_buf))
 
 		/* Expecting a seperator. If not present, go to error */
 		#define token_expect_seperator(c) \
 			{ \
-				if (!ptr_next || *ptr_next != c) { \
+				if (!rd_ptr || *rd_ptr != c) { \
 					goto error; \
 				} else { \
-					ptr_next += 1; \
+					rd_ptr += 1; \
 				} \
 			}
 
 		/* Expecting an integer argument. If not present, go to error */
 		#define token_expect_integer_arg(arg) \
 			{ \
-				arg = dbg_strtol(ptr_next, token_remaining_buf, \
-				                 16, &ptr_next); \
-				if (!ptr_next) { \
+				arg = dbg_strtol(rd_ptr, token_remaining_buf, \
+				                 16, &rd_ptr); \
+				if (!rd_ptr) { \
 					goto error; \
 				} \
 			}
@@ -807,7 +866,7 @@ int dbg_main(struct dbg_state *state)
 			pkt_len = status;
 			dbg_send_packet(pkt_buf, pkt_len);
 			break;
-		
+
 		/*
 		 * Write Registers
 		 * Command Format: G XX...
@@ -827,7 +886,7 @@ int dbg_main(struct dbg_state *state)
 		 * Command Format: p n
 		 */
 		case 'p':
-			ptr_next += 1;
+			rd_ptr += 1;
 			token_expect_integer_arg(addr);
 
 			if (addr >= DBG_CPU_NUM_REGISTERS) {
@@ -843,18 +902,18 @@ int dbg_main(struct dbg_state *state)
 			}
 			dbg_send_packet(pkt_buf, status);
 			break;
-		
+
 		/*
 		 * Write a Register
 		 * Command Format: P n...=r...
 		 */
 		case 'P':
-			ptr_next += 1;
+			rd_ptr += 1;
 			token_expect_integer_arg(addr);
 			token_expect_seperator('=');
 
 			if (addr < DBG_CPU_NUM_REGISTERS) {
-				status = dbg_dec_hex(ptr_next, token_remaining_buf,
+				status = dbg_dec_hex(rd_ptr, token_remaining_buf,
 				                     (char *)&(state->registers[addr]),
 				                     sizeof(state->registers[addr]));
 				if (status == EOF) {
@@ -863,13 +922,13 @@ int dbg_main(struct dbg_state *state)
 			}
 			dbg_send_ok_packet(pkt_buf, sizeof(pkt_buf));
 			break;
-		
+
 		/*
 		 * Read Memory
 		 * Command Format: m addr,length
 		 */
 		case 'm':
-			ptr_next += 1;
+			rd_ptr += 1;
 			token_expect_integer_arg(addr);
 			token_expect_seperator(',');
 			token_expect_integer_arg(length);
@@ -882,20 +941,20 @@ int dbg_main(struct dbg_state *state)
 			}
 			dbg_send_packet(pkt_buf, status);
 			break;
-		
+
 		/*
 		 * Write Memory
 		 * Command Format: M addr,length:XX..
 		 */
 		case 'M':
-			ptr_next += 1;
+			rd_ptr += 1;
 			token_expect_integer_arg(addr);
 			token_expect_seperator(',');
 			token_expect_integer_arg(length);
 			token_expect_seperator(':');
 
 			/* Write Memory */
-			status = dbg_mem_write(ptr_next, token_remaining_buf,
+			status = dbg_mem_write(rd_ptr, token_remaining_buf,
 			                       addr, length, dbg_dec_hex);
 			if (status == EOF) {
 				goto error;
@@ -908,14 +967,14 @@ int dbg_main(struct dbg_state *state)
 		 * Command Format: X addr,length:XX..
 		 */
 		case 'X':
-			ptr_next += 1;
+			rd_ptr += 1;
 			token_expect_integer_arg(addr);
 			token_expect_seperator(',');
 			token_expect_integer_arg(length);
 			token_expect_seperator(':');
 
 			/* Write Memory */
-			status = dbg_mem_write(ptr_next, token_remaining_buf,
+			status = dbg_mem_write(rd_ptr, token_remaining_buf,
 			                       addr, length, dbg_dec_bin);
 			if (status == EOF) {
 				goto error;
@@ -923,7 +982,7 @@ int dbg_main(struct dbg_state *state)
 			dbg_send_ok_packet(pkt_buf, sizeof(pkt_buf));
 			break;
 
-		/* 
+		/*
 		 * Continue
 		 * Command Format: c [addr]
 		 */
@@ -937,12 +996,76 @@ int dbg_main(struct dbg_state *state)
 		 */
 		case 's':
 			dbg_step();
-			return 0;
+			dbg_send_signal_packet(pkt_buf, sizeof(pkt_buf), 5);
+			break;
+      // 			return 0;
 
 		case '?':
 			dbg_send_signal_packet(pkt_buf, sizeof(pkt_buf), state->signum);
 			break;
 
+		case 'k':
+			return 0;
+			break;
+
+    case 'A':
+      dbg_send_ok_packet(pkt_buf, sizeof(pkt_buf));
+      break;
+    case 'q':
+      rd_ptr++;
+      if (dbg_strcmp(rd_ptr, "RegisterInfo") == 0) {
+        int regno;
+        rd_ptr += dbg_strlen("RegisterInfo");
+        token_expect_integer_arg(regno);
+        if (regno >= 0 && regno < DBG_CPU_NUM_REGISTERS) {
+          dbg_strcpy(pkt_buf, state->reginfo[regno]);
+          dbg_send_packet(pkt_buf, dbg_strlen(pkt_buf));
+        } else {
+          dbg_send_error_packet(pkt_buf, sizeof(pkt_buf), 0x45);
+        }
+      } else if (dbg_strcmp(rd_ptr, "Supported") == 0) {
+        wr_ptr = pkt_buf;
+        dbg_strcpy(wr_ptr, "PacketSize=");
+        wr_ptr += dbg_strlen("PacketSize=");
+        dbg_itoa(1024, wr_ptr, 10);
+        wr_ptr = pkt_buf + dbg_strlen(pkt_buf);
+        dbg_strcpy(wr_ptr, ";multiprocess+");
+        dbg_send_packet(pkt_buf, dbg_strlen(pkt_buf));
+      } else if (dbg_strcmp(rd_ptr, "fThreadInfo") == 0) {
+        // TODO
+        dbg_send_packet("m1", 2);
+      } else if (dbg_strcmp(rd_ptr, "sThreadInfo") == 0) {
+        dbg_send_packet("l", 1);
+      } else if (dbg_strcmp(rd_ptr, "C") == 0) {
+        wr_ptr = pkt_buf;
+        dbg_strcpy(wr_ptr, "QC");
+        wr_ptr = pkt_buf + dbg_strlen(pkt_buf);
+        dbg_itoa(1, wr_ptr, 10);
+        dbg_send_packet(pkt_buf, dbg_strlen(pkt_buf));
+      } else {
+        dbg_send_packet(NULL, 0);
+      }
+      break;
+    case 'v':
+      if (dbg_strcmp(pkt_buf, "vCont?") == 0) {
+        dbg_strcpy(pkt_buf, "vCont;c;s");
+        dbg_send_packet(pkt_buf, dbg_strlen(pkt_buf));
+      } else if (dbg_strcmp(pkt_buf, "vCont;") == 0) {
+        char command;
+        rd_ptr += dbg_strlen("vCont;");
+        command = *rd_ptr;
+        rd_ptr++;
+        if (command == 'c') {
+          dbg_continue();
+        } else if (command == 's') {
+          dbg_step();
+        }
+        dbg_send_signal_packet(pkt_buf, sizeof(pkt_buf), state->signum);
+        return 0;
+      } else {
+        dbg_send_packet(NULL, 0);
+      }
+      break;
 		/*
 		 * Unsupported Command
 		 */

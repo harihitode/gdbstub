@@ -49,6 +49,13 @@
 #define NULL ((void*)0)
 #endif
 
+#if DEBUG
+#include <stdio.h>
+#include <stdlib.h>
+#else
+typedef unsigned int size_t;
+#endif
+
 #ifndef ASSERT
 #if DEBUG
 #define ASSERT(x) { \
