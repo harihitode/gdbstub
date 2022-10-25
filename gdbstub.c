@@ -598,7 +598,7 @@ int dbg_dec_bin(const char *buf, size_t buf_len, char *data, size_t data_len)
  */
 int dbg_mem_read(char *buf, size_t buf_len, address addr, size_t len, dbg_enc_func enc)
 {
-	char data[64];
+	char data[512];
 	size_t pos;
 
 	if (len > sizeof(data)) {
@@ -622,7 +622,7 @@ int dbg_mem_read(char *buf, size_t buf_len, address addr, size_t len, dbg_enc_fu
  */
 int dbg_mem_write(const char *buf, size_t buf_len, address addr, size_t len, dbg_dec_func dec)
 {
-	char data[64];
+	char data[512];
 	size_t pos;
 
 	if (len > sizeof(data)) {
@@ -718,7 +718,10 @@ int dbg_send_signal_packet(char *buf, size_t buf_len, char signal)
 	size = 1 + status;
   dbg_strcpy(&buf[size], "thread:p1.");
   dbg_itoa(1, &buf[dbg_strlen(buf)], 10);
-	return dbg_send_packet(buf, dbg_strlen(buf));
+  size = dbg_strlen(buf);
+  buf[size++] = ';';
+  buf[size] = '\0';
+  return dbg_send_packet(buf, size);
 }
 
 /*
@@ -801,7 +804,7 @@ int dbg_read(char *buf, size_t buf_len, size_t len)
 int dbg_main(struct dbg_state *state)
 {
 	address     addr;
-	char        pkt_buf[1024];
+	char        pkt_buf[2048];
 	int         status;
 	size_t      length;
 	size_t      pkt_len;
@@ -809,7 +812,6 @@ int dbg_main(struct dbg_state *state)
 	char        *wr_ptr;
 
 	dbg_send_signal_packet(pkt_buf, sizeof(pkt_buf), state->signum);
-
 	while (1) {
 		/* Receive the next packet */
 		status = dbg_recv_packet(pkt_buf, sizeof(pkt_buf), &pkt_len);
@@ -885,14 +887,13 @@ int dbg_main(struct dbg_state *state)
 		 * Read a Register
 		 * Command Format: p n
 		 */
-		case 'p':
+		case 'p': {
 			rd_ptr += 1;
 			token_expect_integer_arg(addr);
 
 			if (addr >= DBG_CPU_NUM_REGISTERS) {
 				goto error;
 			}
-
 			/* Read Register */
 			status = dbg_enc_hex(pkt_buf, sizeof(pkt_buf),
 			                     (char *)&(state->registers[addr]),
@@ -902,7 +903,7 @@ int dbg_main(struct dbg_state *state)
 			}
 			dbg_send_packet(pkt_buf, status);
 			break;
-
+    }
 		/*
 		 * Write a Register
 		 * Command Format: P n...=r...
@@ -932,7 +933,6 @@ int dbg_main(struct dbg_state *state)
 			token_expect_integer_arg(addr);
 			token_expect_seperator(',');
 			token_expect_integer_arg(length);
-
 			/* Read Memory */
 			status = dbg_mem_read(pkt_buf, sizeof(pkt_buf),
 			                      addr, length, dbg_enc_hex);
@@ -1005,9 +1005,47 @@ int dbg_main(struct dbg_state *state)
 			break;
 
 		case 'k':
+			// GDB-RSP does not require any response to the k packet, but LLDB assumes 'X' or 'W'.
+			// It seems mac-os specific, here we send W packet as just an acknowledgment.
+			// see "llvm-project/lldb/source/Plugins/Process/gdb-remote/ProcessGDBRemote.cpp"
+			dbg_send_packet("W", 1);
+			dbg_sys_kill();
 			return 0;
-			break;
 
+		case 'D':
+			dbg_sys_kill();
+			dbg_send_ok_packet(pkt_buf, sizeof(pkt_buf));
+			return 0;
+
+    case 'Z':
+    case 'z': {
+      char command = *rd_ptr++;
+      int type = 0;
+			token_expect_integer_arg(type);
+			token_expect_seperator(',');
+			token_expect_integer_arg(addr);
+      if (type == 0) {
+        if (command == 'Z') {
+          dbg_sys_set_breakpoint(addr);
+        } else {
+          dbg_sys_reset_breakpoint(addr);
+        }
+        dbg_send_ok_packet(pkt_buf, sizeof(pkt_buf));
+      } else {
+        dbg_send_packet(NULL, 0);
+      }
+      break;
+    }
+
+    case 'H': {
+      char command = *++rd_ptr;
+      if (command == 'c' || command == 'g') {
+        dbg_send_ok_packet(pkt_buf, sizeof(pkt_buf));
+      } else {
+        dbg_send_error_packet(pkt_buf, sizeof(pkt_buf), 0x00);
+      }
+      break;
+    }
     case 'A':
       dbg_send_ok_packet(pkt_buf, sizeof(pkt_buf));
       break;
@@ -1042,6 +1080,14 @@ int dbg_main(struct dbg_state *state)
         wr_ptr = pkt_buf + dbg_strlen(pkt_buf);
         dbg_itoa(1, wr_ptr, 10);
         dbg_send_packet(pkt_buf, dbg_strlen(pkt_buf));
+      } else if (dbg_strcmp(rd_ptr, "HostInfo") == 0) {
+        wr_ptr = pkt_buf;
+        dbg_strcpy(pkt_buf, "triple:");
+        wr_ptr += 7;
+        wr_ptr += dbg_enc_hex(wr_ptr, 64, state->triple, dbg_strlen(state->triple));
+        *wr_ptr++ = ';';
+        dbg_strcpy(wr_ptr, "ptrsize:4;endian:little;");
+        dbg_send_packet(pkt_buf, dbg_strlen(pkt_buf));
       } else {
         dbg_send_packet(NULL, 0);
       }
@@ -1061,7 +1107,6 @@ int dbg_main(struct dbg_state *state)
           dbg_step();
         }
         dbg_send_signal_packet(pkt_buf, sizeof(pkt_buf), state->signum);
-        return 0;
       } else {
         dbg_send_packet(NULL, 0);
       }
