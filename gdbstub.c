@@ -64,7 +64,6 @@ int dbg_enc_bin(char *buf, size_t buf_len, const char *data, size_t data_len);
 int dbg_dec_bin(const char *buf, size_t buf_len, char *data, size_t data_len);
 
 /* Packet creation helpers */
-int dbg_send_ok_packet(char *buf, size_t buf_len);
 int dbg_send_conmsg_packet(char *buf, size_t buf_len, const char *msg);
 int dbg_send_signal_packet(char *buf, size_t buf_len, char signal);
 int dbg_send_error_packet(char *buf, size_t buf_len, char error);
@@ -668,14 +667,6 @@ int dbg_step(void)
  ****************************************************************************/
 
 /*
- * Send OK packet
- */
-int dbg_send_ok_packet(char *buf, size_t buf_len)
-{
-	return dbg_send_packet("OK", 2);
-}
-
-/*
  * Send a message to the debugging console (via O XX... packet)
  */
 int dbg_send_conmsg_packet(char *buf, size_t buf_len, const char *msg)
@@ -880,7 +871,7 @@ int dbg_main(struct dbg_state *state)
 			if (status == EOF) {
 				goto error;
 			}
-			dbg_send_ok_packet(pkt_buf, sizeof(pkt_buf));
+			dbg_send_packet("OK", 2);
 			break;
 
 		/*
@@ -921,7 +912,7 @@ int dbg_main(struct dbg_state *state)
 					goto error;
 				}
 			}
-			dbg_send_ok_packet(pkt_buf, sizeof(pkt_buf));
+			dbg_send_packet("OK", 2);
 			break;
 
 		/*
@@ -959,7 +950,7 @@ int dbg_main(struct dbg_state *state)
 			if (status == EOF) {
 				goto error;
 			}
-			dbg_send_ok_packet(pkt_buf, sizeof(pkt_buf));
+			dbg_send_packet("OK", 2);
 			break;
 
 		/*
@@ -979,7 +970,7 @@ int dbg_main(struct dbg_state *state)
 			if (status == EOF) {
 				goto error;
 			}
-			dbg_send_ok_packet(pkt_buf, sizeof(pkt_buf));
+			dbg_send_packet("OK", 2);
 			break;
 
 		/*
@@ -988,7 +979,8 @@ int dbg_main(struct dbg_state *state)
 		 */
 		case 'c':
 			dbg_continue();
-			return 0;
+			dbg_send_signal_packet(pkt_buf, sizeof(pkt_buf), state->signum);
+			break;
 
 		/*
 		 * Single-step
@@ -996,9 +988,8 @@ int dbg_main(struct dbg_state *state)
 		 */
 		case 's':
 			dbg_step();
-			dbg_send_signal_packet(pkt_buf, sizeof(pkt_buf), 5);
+			dbg_send_signal_packet(pkt_buf, sizeof(pkt_buf), state->signum);
 			break;
-      // 			return 0;
 
 		case '?':
 			dbg_send_signal_packet(pkt_buf, sizeof(pkt_buf), state->signum);
@@ -1014,25 +1005,29 @@ int dbg_main(struct dbg_state *state)
 
 		case 'D':
 			dbg_sys_kill();
-			dbg_send_ok_packet(pkt_buf, sizeof(pkt_buf));
+			dbg_send_packet("OK", 2);
 			return 0;
 
     case 'Z':
     case 'z': {
       char command = *rd_ptr++;
       int type = 0;
-			token_expect_integer_arg(type);
-			token_expect_seperator(',');
-			token_expect_integer_arg(addr);
-      if (type == 0) {
-        if (command == 'Z') {
-          dbg_sys_set_breakpoint(addr);
-        } else {
-          dbg_sys_reset_breakpoint(addr);
-        }
-        dbg_send_ok_packet(pkt_buf, sizeof(pkt_buf));
+      int kind = 0;
+      int ret = 0;
+      token_expect_integer_arg(type);
+      token_expect_seperator(',');
+      token_expect_integer_arg(addr);
+      token_expect_seperator(',');
+      token_expect_integer_arg(kind);
+      if (command == 'Z') {
+        ret = dbg_sys_set_bw_point(addr, type, kind);
       } else {
+        ret = dbg_sys_rst_bw_point(addr, type, kind);
+      }
+      if (ret) {
         dbg_send_packet(NULL, 0);
+      } else {
+        dbg_send_packet("OK", 2);
       }
       break;
     }
@@ -1040,20 +1035,22 @@ int dbg_main(struct dbg_state *state)
     case 'H': {
       char command = *++rd_ptr;
       if (command == 'c' || command == 'g') {
-        dbg_send_ok_packet(pkt_buf, sizeof(pkt_buf));
+        dbg_send_packet("OK", 2);
       } else {
         dbg_send_error_packet(pkt_buf, sizeof(pkt_buf), 0x00);
       }
       break;
     }
+
     case 'A':
-      dbg_send_ok_packet(pkt_buf, sizeof(pkt_buf));
+      dbg_send_packet("OK", 2);
       break;
+
     case 'q':
       rd_ptr++;
       if (dbg_strcmp(rd_ptr, "RegisterInfo") == 0) {
         int regno;
-        rd_ptr += dbg_strlen("RegisterInfo");
+        rd_ptr += 12;
         token_expect_integer_arg(regno);
         if (regno >= 0 && regno < DBG_CPU_NUM_REGISTERS) {
           dbg_strcpy(pkt_buf, state->reginfo[regno]);
@@ -1070,9 +1067,10 @@ int dbg_main(struct dbg_state *state)
         dbg_strcpy(wr_ptr, ";multiprocess+");
         dbg_send_packet(pkt_buf, dbg_strlen(pkt_buf));
       } else if (dbg_strcmp(rd_ptr, "fThreadInfo") == 0) {
-        // TODO
+        // TODO: multiple threads
         dbg_send_packet("m1", 2);
       } else if (dbg_strcmp(rd_ptr, "sThreadInfo") == 0) {
+        // TODO: multiple threads
         dbg_send_packet("l", 1);
       } else if (dbg_strcmp(rd_ptr, "C") == 0) {
         wr_ptr = pkt_buf;
@@ -1092,6 +1090,7 @@ int dbg_main(struct dbg_state *state)
         dbg_send_packet(NULL, 0);
       }
       break;
+
     case 'v':
       if (dbg_strcmp(pkt_buf, "vCont?") == 0) {
         dbg_strcpy(pkt_buf, "vCont;c;s");
@@ -1099,8 +1098,7 @@ int dbg_main(struct dbg_state *state)
       } else if (dbg_strcmp(pkt_buf, "vCont;") == 0) {
         char command;
         rd_ptr += dbg_strlen("vCont;");
-        command = *rd_ptr;
-        rd_ptr++;
+        command = *rd_ptr++;
         if (command == 'c') {
           dbg_continue();
         } else if (command == 's') {

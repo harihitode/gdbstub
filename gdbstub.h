@@ -87,7 +87,7 @@ int dbg_sys_mem_writeb(address addr, char val);
 int dbg_sys_continue();
 int dbg_sys_step();
 int dbg_sys_kill();
-int dbg_sys_set_breakpoint(address addr);
-int dbg_sys_reset_breakpoint(address addr);
+int dbg_sys_set_bw_point(address addr, int type, int kind);
+int dbg_sys_rst_bw_point(address addr, int type, int kind);
 
 #endif
