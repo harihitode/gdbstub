@@ -69,8 +69,8 @@ int dbg_send_signal_packet(char *buf, size_t buf_len, char signal);
 int dbg_send_error_packet(char *buf, size_t buf_len, char error);
 
 /* Command functions */
-int dbg_mem_read(char *buf, size_t buf_len, address addr, size_t len, dbg_enc_func enc);
-int dbg_mem_write(const char *buf, size_t buf_len, address addr, size_t len, dbg_dec_func dec);
+int dbg_mem_read(struct dbg_state *state, char *buf, size_t buf_len, address addr, size_t len, dbg_enc_func enc);
+int dbg_mem_write(struct dbg_state *state, const char *buf, size_t buf_len, address addr, size_t len, dbg_dec_func dec);
 int dbg_continue(void);
 int dbg_step(void);
 
@@ -595,53 +595,75 @@ int dbg_dec_bin(const char *buf, size_t buf_len, char *data, size_t data_len)
  *    0+  number of bytes written to buf
  *    EOF if the buffer is too small
  */
-int dbg_mem_read(char *buf, size_t buf_len, address addr, size_t len, dbg_enc_func enc)
+int dbg_mem_read(struct dbg_state *state, char *buf, size_t buf_len, address addr, size_t len, dbg_enc_func enc)
 {
-	char data[512];
-	size_t pos;
+  char data[512];
+  size_t pos;
 
-	if (len > sizeof(data)) {
-		return EOF;
-	}
+  if (len > sizeof(data)) {
+    return EOF;
+  }
 
-	/* Read from system memory */
-	for (pos = 0; pos < len; pos++) {
-		if (dbg_sys_mem_readb(addr+pos, &data[pos])) {
-			/* Failed to read */
-			return EOF;
-		}
-	}
+  /* Read from system memory */
+  for (pos = 0; pos < len; pos++) {
+    char bp_found = 0;
+    /* for SW breakpoint */
+    for (struct dbg_break_watch *p = state->bw; p != NULL; p = p->next) {
+      if (((addr+pos) & 0xfffffffc) == (p->addr & 0xfffffffc) && (p->type == 0)) {
+        bp_found = 1;
+        data[pos] = (char)((p->value >> (8 * ((addr+pos) & 0x03))) & 0x0ff);
+        break;
+      }
+    }
+    if (bp_found == 0) {
+      if (dbg_sys_mem_readb(addr+pos, &data[pos])) {
+        /* Failed to read */
+        return EOF;
+      }
+    }
+  }
 
-	/* Encode data */
-	return enc(buf, buf_len, data, len);
+  /* Encode data */
+  return enc(buf, buf_len, data, len);
 }
 
 /*
  * Write to memory from encoded buf.
  */
-int dbg_mem_write(const char *buf, size_t buf_len, address addr, size_t len, dbg_dec_func dec)
+int dbg_mem_write(struct dbg_state *state, const char *buf, size_t buf_len, address addr, size_t len, dbg_dec_func dec)
 {
-	char data[512];
-	size_t pos;
+  char data[512];
+  size_t pos;
 
-	if (len > sizeof(data)) {
-		return EOF;
-	}
+  if (len > sizeof(data)) {
+    return EOF;
+  }
 
-	/* Decode data */
-	if (dec(buf, buf_len, data, len) == EOF) {
-		return EOF;
-	}
+  /* Decode data */
+  if (dec(buf, buf_len, data, len) == EOF) {
+    return EOF;
+  }
 
-	/* Write to system memory */
-	for (pos = 0; pos < len; pos++) {
-		if (dbg_sys_mem_writeb(addr+pos, data[pos])) {
-			/* Failed to write */
-			return EOF;
-		}
-	}
+  /* Write to system memory */
+  for (pos = 0; pos < len; pos++) {
+    char bp_found = 0;
+    /* for SW breakpoint */
+    for (struct dbg_break_watch *p = state->bw; p != NULL; p = p->next) {
+      if (((addr+pos) & 0xfffffffc) == (p->addr & 0xfffffffc) && (p->type == 0)) {
+        bp_found = 1;
+        p->value = (p->value & ~(0x00FF << (8 * ((addr+pos) & 0x3)))) | ((unsigned char)data[pos] << (8 * ((addr+pos) & 0x3)));
+        break;
+      }
+    }
+    if (bp_found == 0) {
+      if (dbg_sys_mem_writeb(addr+pos, data[pos])) {
+        /* Failed to write */
+        return EOF;
+      }
+    }
+  }
 
-	return 0;
+  return 0;
 }
 
 /*
@@ -925,7 +947,7 @@ int dbg_main(struct dbg_state *state)
 			token_expect_seperator(',');
 			token_expect_integer_arg(length);
 			/* Read Memory */
-			status = dbg_mem_read(pkt_buf, sizeof(pkt_buf),
+			status = dbg_mem_read(state, pkt_buf, sizeof(pkt_buf),
 			                      addr, length, dbg_enc_hex);
 			if (status == EOF) {
 				goto error;
@@ -945,7 +967,7 @@ int dbg_main(struct dbg_state *state)
 			token_expect_seperator(':');
 
 			/* Write Memory */
-			status = dbg_mem_write(rd_ptr, token_remaining_buf,
+			status = dbg_mem_write(state, rd_ptr, token_remaining_buf,
 			                       addr, length, dbg_dec_hex);
 			if (status == EOF) {
 				goto error;
@@ -965,7 +987,7 @@ int dbg_main(struct dbg_state *state)
 			token_expect_seperator(':');
 
 			/* Write Memory */
-			status = dbg_mem_write(rd_ptr, token_remaining_buf,
+			status = dbg_mem_write(state, rd_ptr, token_remaining_buf,
 			                       addr, length, dbg_dec_bin);
 			if (status == EOF) {
 				goto error;
