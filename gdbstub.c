@@ -824,7 +824,7 @@ int dbg_main(struct dbg_state *state)
 	const char  *rd_ptr;
 	char        *wr_ptr;
 
-	dbg_send_signal_packet(pkt_buf, sizeof(pkt_buf), state->signum);
+	dbg_send_signal_packet(pkt_buf, sizeof(pkt_buf), dbg_sys_get_signum());
 	while (1) {
 		/* Receive the next packet */
 		status = dbg_recv_packet(pkt_buf, sizeof(pkt_buf), &pkt_len);
@@ -1001,7 +1001,7 @@ int dbg_main(struct dbg_state *state)
 		 */
 		case 'c':
 			dbg_continue();
-			dbg_send_signal_packet(pkt_buf, sizeof(pkt_buf), state->signum);
+			dbg_send_signal_packet(pkt_buf, sizeof(pkt_buf), dbg_sys_get_signum());
 			break;
 
 		/*
@@ -1010,11 +1010,11 @@ int dbg_main(struct dbg_state *state)
 		 */
 		case 's':
 			dbg_step();
-			dbg_send_signal_packet(pkt_buf, sizeof(pkt_buf), state->signum);
+			dbg_send_signal_packet(pkt_buf, sizeof(pkt_buf), dbg_sys_get_signum());
 			break;
 
 		case '?':
-			dbg_send_signal_packet(pkt_buf, sizeof(pkt_buf), state->signum);
+			dbg_send_signal_packet(pkt_buf, sizeof(pkt_buf), dbg_sys_get_signum());
 			break;
 
 		case 'k':
@@ -1126,7 +1126,7 @@ int dbg_main(struct dbg_state *state)
         } else if (command == 's') {
           dbg_step();
         }
-        dbg_send_signal_packet(pkt_buf, sizeof(pkt_buf), state->signum);
+        dbg_send_signal_packet(pkt_buf, sizeof(pkt_buf), dbg_sys_get_signum());
       } else {
         dbg_send_packet(NULL, 0);
       }

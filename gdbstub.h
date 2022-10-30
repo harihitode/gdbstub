@@ -89,5 +89,6 @@ int dbg_sys_step(void);
 int dbg_sys_kill(void);
 int dbg_sys_set_bw_point(address addr, int type, int kind);
 int dbg_sys_rst_bw_point(address addr, int type, int kind);
+char dbg_sys_get_signum(void);
 
 #endif
