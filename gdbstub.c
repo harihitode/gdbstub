@@ -823,6 +823,7 @@ int dbg_main(struct dbg_state *state)
 	size_t      pkt_len;
 	const char  *rd_ptr;
 	char        *wr_ptr;
+	unsigned    registers[NUM_REGISTERS];
 
 	dbg_send_signal_packet(pkt_buf, sizeof(pkt_buf), dbg_sys_get_signum());
 	while (1) {
@@ -872,9 +873,12 @@ int dbg_main(struct dbg_state *state)
 		 */
 		case 'g':
 			/* Encode registers */
+      for (unsigned i = 0; i < NUM_REGISTERS; i++) {
+        dbg_sys_reg_read(i, &registers[i]);
+      }
 			status = dbg_enc_hex(pkt_buf, sizeof(pkt_buf),
-			                     (char *)&(state->registers),
-			                     sizeof(state->registers));
+			                     (char *)registers,
+			                     sizeof(registers[0]) * NUM_REGISTERS);
 			if (status == EOF) {
 				goto error;
 			}
@@ -888,11 +892,14 @@ int dbg_main(struct dbg_state *state)
 		 */
 		case 'G':
 			status = dbg_dec_hex(pkt_buf+1, pkt_len-1,
-			                     (char *)&(state->registers),
-			                     sizeof(state->registers));
+			                     (char *)registers,
+			                     sizeof(registers[0]) * NUM_REGISTERS);
 			if (status == EOF) {
 				goto error;
 			}
+      for (unsigned i = 0; i < NUM_REGISTERS; i++) {
+        dbg_sys_reg_write(i, registers[i]);
+      }
 			dbg_send_packet("OK", 2);
 			break;
 
@@ -908,9 +915,11 @@ int dbg_main(struct dbg_state *state)
 				goto error;
 			}
 			/* Read Register */
+			unsigned regval = 0;
+			dbg_sys_reg_read(addr, &regval);
 			status = dbg_enc_hex(pkt_buf, sizeof(pkt_buf),
-			                     (char *)&(state->registers[addr]),
-			                     sizeof(state->registers[addr]));
+			                     (char *)&(regval),
+			                     sizeof(regval));
 			if (status == EOF) {
 				goto error;
 			}
@@ -927,12 +936,14 @@ int dbg_main(struct dbg_state *state)
 			token_expect_seperator('=');
 
 			if (addr < DBG_CPU_NUM_REGISTERS) {
+				unsigned regval = 0;
 				status = dbg_dec_hex(rd_ptr, token_remaining_buf,
-				                     (char *)&(state->registers[addr]),
-				                     sizeof(state->registers[addr]));
+				                     (char *)&(regval),
+				                     sizeof(regval));
 				if (status == EOF) {
 					goto error;
 				}
+				dbg_sys_reg_write(addr, regval);
 			}
 			dbg_send_packet("OK", 2);
 			break;

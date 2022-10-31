@@ -82,6 +82,8 @@ int dbg_main(struct dbg_state *state);
 /* System functions, supported by all stubs */
 int dbg_sys_getc(void);
 int dbg_sys_putchar(int ch);
+int dbg_sys_reg_read(address regno, unsigned *val);
+int dbg_sys_reg_write(address regno, unsigned val);
 int dbg_sys_mem_readb(address addr, char *val);
 int dbg_sys_mem_writeb(address addr, char val);
 int dbg_sys_continue(void);
