@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2022 harihitode
  * Copyright (c) 2016-2019 Matt Borgerson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -58,18 +59,18 @@ typedef unsigned int size_t;
 
 #ifndef ASSERT
 #if DEBUG
-#define ASSERT(x) { \
-	if (!(x)) { \
-		fprintf(stderr, "ASSERTION FAILED\n"); \
-		fprintf(stderr, "  Assertion: %s\n", #x); \
-		fprintf(stderr, "  Location:  %s @ %s:%d\n", __func__, \
-		                                             __FILE__, __LINE__); \
-		exit(1); \
-	} \
-}
+#define ASSERT(x) {                                           \
+    if (!(x)) {                                               \
+      fprintf(stderr, "ASSERTION FAILED\n");                  \
+      fprintf(stderr, "  Assertion: %s\n", #x);               \
+      fprintf(stderr, "  Location:  %s @ %s:%d\n", __func__,  \
+              __FILE__, __LINE__);                            \
+      exit(1);                                                \
+    }                                                         \
+  }
 #else
-#define ASSERT(x) \
-	do {} while (0)
+#define ASSERT(x)                               \
+  do {} while (0)
 #endif
 #endif
 
@@ -80,17 +81,19 @@ typedef unsigned int size_t;
 int dbg_main(struct dbg_state *state);
 
 /* System functions, supported by all stubs */
-int dbg_sys_getc(void);
-int dbg_sys_putchar(int ch);
-int dbg_sys_reg_read(address regno, unsigned *val);
-int dbg_sys_reg_write(address regno, unsigned val);
-int dbg_sys_mem_readb(address addr, char *val);
-int dbg_sys_mem_writeb(address addr, char val);
-int dbg_sys_continue(void);
-int dbg_sys_step(void);
-int dbg_sys_kill(void);
-int dbg_sys_set_bw_point(address addr, int type, int kind);
-int dbg_sys_rst_bw_point(address addr, int type, int kind);
-char dbg_sys_get_signum(void);
+int dbg_sys_getc(struct dbg_state *state);
+int dbg_sys_putchar(struct dbg_state *state, int ch);
+int dbg_sys_reg_read(struct dbg_state *state, address regno, unsigned *val);
+int dbg_sys_reg_write(struct dbg_state *state, address regno, unsigned val);
+int dbg_sys_mem_readb(struct dbg_state *state, address addr, char *val);
+int dbg_sys_mem_writeb(struct dbg_state *state, address addr, char val);
+int dbg_sys_continue(struct dbg_state *state);
+int dbg_sys_step(struct dbg_state *state);
+int dbg_sys_kill(struct dbg_state *state);
+int dbg_sys_set_bw_point(struct dbg_state *state, address addr, int type, int kind);
+int dbg_sys_rst_bw_point(struct dbg_state *state, address addr, int type, int kind);
+char dbg_sys_get_signum(const struct dbg_state *state);
+char *dbg_sys_get_reginfo(const struct dbg_state *state, unsigned regno);
+char *dbg_sys_get_triple(const struct dbg_state *state);
 
 #endif
