@@ -782,7 +782,7 @@ int dbg_main(struct dbg_state *state)
   size_t      pkt_len;
   const char  *rd_ptr;
   char        *wr_ptr;
-  unsigned    registers[NUM_REGISTERS];
+  unsigned    registers[DBG_CPU_NUM_REGISTERS];
 
   dbg_send_signal_packet(state, pkt_buf, sizeof(pkt_buf), dbg_sys_get_signum(state));
   while (1) {
@@ -832,12 +832,12 @@ int dbg_main(struct dbg_state *state)
      */
     case 'g':
       /* Encode registers */
-      for (unsigned i = 0; i < NUM_REGISTERS; i++) {
+      for (unsigned i = 0; i < DBG_CPU_NUM_REGISTERS; i++) {
         dbg_sys_reg_read(state, i, &registers[i]);
       }
       status = dbg_enc_hex(pkt_buf, sizeof(pkt_buf),
                            (char *)registers,
-                           sizeof(registers[0]) * NUM_REGISTERS);
+                           sizeof(registers[0]) * DBG_CPU_NUM_REGISTERS);
       if (status == EOF) {
         goto error;
       }
@@ -852,11 +852,11 @@ int dbg_main(struct dbg_state *state)
     case 'G':
       status = dbg_dec_hex(pkt_buf+1, pkt_len-1,
                            (char *)registers,
-                           sizeof(registers[0]) * NUM_REGISTERS);
+                           sizeof(registers[0]) * DBG_CPU_NUM_REGISTERS);
       if (status == EOF) {
         goto error;
       }
-      for (unsigned i = 0; i < NUM_REGISTERS; i++) {
+      for (unsigned i = 0; i < DBG_CPU_NUM_REGISTERS; i++) {
         dbg_sys_reg_write(state, i, registers[i]);
       }
       dbg_send_packet(state, "OK", 2);
