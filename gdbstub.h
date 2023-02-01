@@ -54,7 +54,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #else
-typedef unsigned int size_t;
+#include <stddef.h>
 #endif
 
 #ifndef ASSERT
@@ -93,7 +93,7 @@ int dbg_sys_kill(struct dbg_state *state);
 int dbg_sys_set_bw_point(struct dbg_state *state, address addr, int type, int kind);
 int dbg_sys_rst_bw_point(struct dbg_state *state, address addr, int type, int kind);
 char dbg_sys_get_signum(const struct dbg_state *state);
-char *dbg_sys_get_reginfo(const struct dbg_state *state, unsigned regno);
-char *dbg_sys_get_triple(const struct dbg_state *state);
+const char *dbg_sys_get_reginfo(const struct dbg_state *state, unsigned regno);
+const char *dbg_sys_get_triple(const struct dbg_state *state);
 
 #endif
