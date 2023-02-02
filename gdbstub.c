@@ -289,7 +289,8 @@ int dbg_recv_ack(struct dbg_state *state)
     return 1;
   default:
     /* Bad response! */
-    DEBUG_PRINT("received bad packet response: 0x%2x\n", response);
+    // When entering NoAckMode unintentionally, This warn will always happen.
+    // DEBUG_PRINT("received bad packet response: 0x%2x\n", response);
     return EOF;
   }
 }
@@ -328,10 +329,9 @@ int dbg_send_packet(struct dbg_state *state, const char *pkt_data, size_t pkt_le
   char csum;
 
   /* Send packet start */
-  if (dbg_sys_putchar(state, '$') == EOF) {
+  if (dbg_sys_putc(state, '$') == EOF) {
     return EOF;
   }
-
 #if DEBUG
   {
     size_t p;
@@ -346,7 +346,6 @@ int dbg_send_packet(struct dbg_state *state, const char *pkt_data, size_t pkt_le
     DEBUG_PRINT("\n");
   }
 #endif
-
   /* Send packet data */
   if (dbg_write(state, pkt_data, pkt_len) == EOF) {
     return EOF;
@@ -378,10 +377,9 @@ int dbg_recv_packet(struct dbg_state *state, char *pkt_buf, size_t pkt_buf_len, 
 
   /* Wait for packet start */
   actual_csum = 0;
-
   while (1) {
     data = dbg_sys_getc(state);
-    if (data == '$') {
+    if (data == '$' || data == EOF) {
       /* Detected start of packet. */
       break;
     }
@@ -406,7 +404,7 @@ int dbg_recv_packet(struct dbg_state *state, char *pkt_buf, size_t pkt_buf_len, 
       }
 
       /* Store character and update checksum */
-      pkt_buf[(*pkt_len)++] = (char) data;
+      pkt_buf[(*pkt_len)++] = (char)data;
     }
   }
 
@@ -436,12 +434,12 @@ int dbg_recv_packet(struct dbg_state *state, char *pkt_buf, size_t pkt_buf_len, 
   if (actual_csum != expected_csum) {
     /* Send packet nack */
     DEBUG_PRINT("received packet with bad checksum\n");
-    dbg_sys_putchar(state, '-');
+    dbg_sys_putc(state, '-');
     return EOF;
   }
 
   /* Send packet ack */
-  dbg_sys_putchar(state, '+');
+  dbg_sys_putc(state, '+');
   return 0;
 }
 
@@ -732,11 +730,10 @@ int dbg_send_error_packet(struct dbg_state *state, char *buf, size_t buf_len, ch
 int dbg_write(struct dbg_state *state, const char *buf, size_t len)
 {
   while (len--) {
-    if (dbg_sys_putchar(state, *buf++) == EOF) {
+    if (dbg_sys_putc(state, *buf++) == EOF) {
       return EOF;
     }
   }
-
   return 0;
 }
 
@@ -784,339 +781,341 @@ int dbg_main(struct dbg_state *state)
   char        *wr_ptr;
   unsigned    registers[DBG_CPU_NUM_REGISTERS];
 
-  dbg_send_signal_packet(state, pkt_buf, sizeof(pkt_buf), dbg_sys_get_signum(state));
-  while (1) {
-    /* Receive the next packet */
-    status = dbg_recv_packet(state, pkt_buf, sizeof(pkt_buf), &pkt_len);
-    if (status == EOF) {
-      break;
-    }
+  /* Receive the next packet */
+  status = dbg_recv_packet(state, pkt_buf, sizeof(pkt_buf), &pkt_len);
 
-    if (pkt_len == 0) {
-      /* Received empty packet.. */
-      continue;
-    }
-
-    rd_ptr = pkt_buf;
-    /*
-     * Handle one letter commands
-     */
-    switch (pkt_buf[0]) {
+  if (status == EOF || pkt_len == 0) {
+    /* Received empty packet.. */
+    return 0;
+  }
+  rd_ptr = pkt_buf;
+  /*
+   * Handle one letter commands
+   */
+  switch (pkt_buf[0]) {
 
     /* Calculate remaining space in packet from rd_ptr position. */
-    #define token_remaining_buf (pkt_len-(rd_ptr-pkt_buf))
+#define token_remaining_buf (pkt_len-(rd_ptr-pkt_buf))
 
     /* Expecting a seperator. If not present, go to error */
-    #define token_expect_seperator(c) \
-      { \
-        if (!rd_ptr || *rd_ptr != c) { \
-          goto error; \
-        } else { \
-          rd_ptr += 1; \
-        } \
-      }
+#define token_expect_seperator(c)               \
+    {                                           \
+      if (!rd_ptr || *rd_ptr != c) {            \
+        goto error;                             \
+      } else {                                  \
+        rd_ptr += 1;                            \
+      }                                         \
+    }
 
     /* Expecting an integer argument. If not present, go to error */
-    #define token_expect_integer_arg(arg) \
-      { \
-        arg = dbg_strtol(rd_ptr, token_remaining_buf, \
-                         16, &rd_ptr); \
-        if (!rd_ptr) { \
-          goto error; \
-        } \
-      }
+#define token_expect_integer_arg(arg)               \
+    {                                               \
+      arg = dbg_strtol(rd_ptr, token_remaining_buf, \
+                       16, &rd_ptr);                \
+      if (!rd_ptr) {                                \
+        goto error;                                 \
+      }                                             \
+    }
 
     /*
      * Read Registers
      * Command Format: g
      */
-    case 'g':
-      /* Encode registers */
-      for (unsigned i = 0; i < DBG_CPU_NUM_REGISTERS; i++) {
-        dbg_sys_reg_read(state, i, &registers[i]);
-      }
-      status = dbg_enc_hex(pkt_buf, sizeof(pkt_buf),
-                           (char *)registers,
-                           sizeof(registers[0]) * DBG_CPU_NUM_REGISTERS);
-      if (status == EOF) {
-        goto error;
-      }
-      pkt_len = status;
-      dbg_send_packet(state, pkt_buf, pkt_len);
-      break;
+  case 'g':
+    /* Encode registers */
+    for (unsigned i = 0; i < DBG_CPU_NUM_REGISTERS; i++) {
+      dbg_sys_reg_read(state, i, &registers[i]);
+    }
+    status = dbg_enc_hex(pkt_buf, sizeof(pkt_buf),
+                         (char *)registers,
+                         sizeof(registers[0]) * DBG_CPU_NUM_REGISTERS);
+    if (status == EOF) {
+      goto error;
+    }
+    pkt_len = status;
+    dbg_send_packet(state, pkt_buf, pkt_len);
+    break;
 
     /*
      * Write Registers
      * Command Format: G XX...
      */
-    case 'G':
-      status = dbg_dec_hex(pkt_buf+1, pkt_len-1,
-                           (char *)registers,
-                           sizeof(registers[0]) * DBG_CPU_NUM_REGISTERS);
-      if (status == EOF) {
-        goto error;
-      }
-      for (unsigned i = 0; i < DBG_CPU_NUM_REGISTERS; i++) {
-        dbg_sys_reg_write(state, i, registers[i]);
-      }
-      dbg_send_packet(state, "OK", 2);
-      break;
+  case 'G':
+    status = dbg_dec_hex(pkt_buf+1, pkt_len-1,
+                         (char *)registers,
+                         sizeof(registers[0]) * DBG_CPU_NUM_REGISTERS);
+    if (status == EOF) {
+      goto error;
+    }
+    for (unsigned i = 0; i < DBG_CPU_NUM_REGISTERS; i++) {
+      dbg_sys_reg_write(state, i, registers[i]);
+    }
+    dbg_send_packet(state, "OK", 2);
+    break;
 
     /*
      * Read a Register
      * Command Format: p n
      */
-    case 'p': {
-      rd_ptr += 1;
-      token_expect_integer_arg(addr);
+  case 'p': {
+    rd_ptr += 1;
+    token_expect_integer_arg(addr);
 
-      if (addr >= DBG_CPU_NUM_REGISTERS) {
-        goto error;
-      }
-      /* Read Register */
+    if (addr >= DBG_CPU_NUM_REGISTERS) {
+      goto error;
+    }
+    /* Read Register */
+    unsigned regval = 0;
+    dbg_sys_reg_read(state, addr, &regval);
+    status = dbg_enc_hex(pkt_buf, sizeof(pkt_buf),
+                         (char *)&(regval),
+                         sizeof(regval));
+    if (status == EOF) {
+      goto error;
+    }
+    dbg_send_packet(state, pkt_buf, status);
+    break;
+  }
+    /*
+     * Write a Register
+     * Command Format: P n...=r...
+     */
+  case 'P':
+    rd_ptr += 1;
+    token_expect_integer_arg(addr);
+    token_expect_seperator('=');
+
+    if (addr < DBG_CPU_NUM_REGISTERS) {
       unsigned regval = 0;
-      dbg_sys_reg_read(state, addr, &regval);
-      status = dbg_enc_hex(pkt_buf, sizeof(pkt_buf),
+      status = dbg_dec_hex(rd_ptr, token_remaining_buf,
                            (char *)&(regval),
                            sizeof(regval));
       if (status == EOF) {
         goto error;
       }
-      dbg_send_packet(state, pkt_buf, status);
-      break;
+      dbg_sys_reg_write(state, addr, regval);
     }
-    /*
-     * Write a Register
-     * Command Format: P n...=r...
-     */
-    case 'P':
-      rd_ptr += 1;
-      token_expect_integer_arg(addr);
-      token_expect_seperator('=');
-
-      if (addr < DBG_CPU_NUM_REGISTERS) {
-        unsigned regval = 0;
-        status = dbg_dec_hex(rd_ptr, token_remaining_buf,
-                             (char *)&(regval),
-                             sizeof(regval));
-        if (status == EOF) {
-          goto error;
-        }
-        dbg_sys_reg_write(state, addr, regval);
-      }
-      dbg_send_packet(state, "OK", 2);
-      break;
+    dbg_send_packet(state, "OK", 2);
+    break;
 
     /*
      * Read Memory
      * Command Format: m addr,length
      */
-    case 'm':
-      rd_ptr += 1;
-      token_expect_integer_arg(addr);
-      token_expect_seperator(',');
-      token_expect_integer_arg(length);
-      /* Read Memory */
-      status = dbg_mem_read(state, pkt_buf, sizeof(pkt_buf),
-                            addr, length, dbg_enc_hex);
-      if (status == EOF) {
-        goto error;
-      }
-      dbg_send_packet(state, pkt_buf, status);
-      break;
+  case 'm':
+    rd_ptr += 1;
+    token_expect_integer_arg(addr);
+    token_expect_seperator(',');
+    token_expect_integer_arg(length);
+    /* Read Memory */
+    status = dbg_mem_read(state, pkt_buf, sizeof(pkt_buf),
+                          addr, length, dbg_enc_hex);
+    if (status == EOF) {
+      goto error;
+    }
+    dbg_send_packet(state, pkt_buf, status);
+    break;
 
     /*
      * Write Memory
      * Command Format: M addr,length:XX..
      */
-    case 'M':
-      rd_ptr += 1;
-      token_expect_integer_arg(addr);
-      token_expect_seperator(',');
-      token_expect_integer_arg(length);
-      token_expect_seperator(':');
+  case 'M':
+    rd_ptr += 1;
+    token_expect_integer_arg(addr);
+    token_expect_seperator(',');
+    token_expect_integer_arg(length);
+    token_expect_seperator(':');
 
-      /* Write Memory */
-      status = dbg_mem_write(state, rd_ptr, token_remaining_buf,
-                             addr, length, dbg_dec_hex);
-      if (status == EOF) {
-        goto error;
-      }
-      dbg_send_packet(state, "OK", 2);
-      break;
+    /* Write Memory */
+    status = dbg_mem_write(state, rd_ptr, token_remaining_buf,
+                           addr, length, dbg_dec_hex);
+    if (status == EOF) {
+      goto error;
+    }
+    dbg_send_packet(state, "OK", 2);
+    break;
 
     /*
      * Write Memory (Binary)
      * Command Format: X addr,length:XX..
      */
-    case 'X':
-      rd_ptr += 1;
-      token_expect_integer_arg(addr);
-      token_expect_seperator(',');
-      token_expect_integer_arg(length);
-      token_expect_seperator(':');
+  case 'X':
+    rd_ptr += 1;
+    token_expect_integer_arg(addr);
+    token_expect_seperator(',');
+    token_expect_integer_arg(length);
+    token_expect_seperator(':');
 
-      /* Write Memory */
-      status = dbg_mem_write(state, rd_ptr, token_remaining_buf,
-                             addr, length, dbg_dec_bin);
-      if (status == EOF) {
-        goto error;
-      }
-      dbg_send_packet(state, "OK", 2);
-      break;
+    /* Write Memory */
+    status = dbg_mem_write(state, rd_ptr, token_remaining_buf,
+                           addr, length, dbg_dec_bin);
+    if (status == EOF) {
+      goto error;
+    }
+    dbg_send_packet(state, "OK", 2);
+    break;
 
     /*
      * Continue
      * Command Format: c [addr]
      */
-    case 'c':
-      dbg_sys_continue(state);
-      dbg_send_signal_packet(state, pkt_buf, sizeof(pkt_buf), dbg_sys_get_signum(state));
-      break;
+  case 'c':
+    dbg_sys_continue(state);
+    dbg_send_signal_packet(state, pkt_buf, sizeof(pkt_buf), dbg_sys_get_signum(state));
+    break;
 
     /*
      * Single-step
      * Command Format: s [addr]
      */
-    case 's':
-      dbg_sys_step(state);
-      dbg_send_signal_packet(state, pkt_buf, sizeof(pkt_buf), dbg_sys_get_signum(state));
-      break;
+  case 's':
+    dbg_sys_step(state);
+    dbg_send_signal_packet(state, pkt_buf, sizeof(pkt_buf), dbg_sys_get_signum(state));
+    break;
 
-    case '?':
-      dbg_send_signal_packet(state, pkt_buf, sizeof(pkt_buf), dbg_sys_get_signum(state));
-      break;
+  case '?':
+    dbg_send_signal_packet(state, pkt_buf, sizeof(pkt_buf), dbg_sys_get_signum(state));
+    break;
 
-    case 'k':
-      // GDB-RSP does not require any response to the k packet, but LLDB assumes 'X' or 'W'.
-      // It seems mac-os specific, here we send W packet as just an acknowledgment.
-      // see "llvm-project/lldb/source/Plugins/Process/gdb-remote/ProcessGDBRemote.cpp"
-      dbg_send_packet(state, "W", 1);
-      dbg_sys_kill(state);
-      return 0;
+  case 'k':
+    // GDB-RSP does not require any response to the k packet, but LLDB assumes 'X' or 'W'.
+    // It seems mac-os specific, here we send W packet as just an acknowledgment.
+    // see "llvm-project/lldb/source/Plugins/Process/gdb-remote/ProcessGDBRemote.cpp"
+    dbg_send_packet(state, "W", 1);
+    dbg_sys_kill(state);
+    return 0;
 
-    case 'D':
-      dbg_sys_kill(state);
-      dbg_send_packet(state, "OK", 2);
-      return 0;
+  case 'D':
+    dbg_sys_kill(state);
+    dbg_send_packet(state, "OK", 2);
+    return 0;
 
-    case 'Z':
-    case 'z': {
-      char command = *rd_ptr++;
-      int type = 0;
-      int kind = 0;
-      int ret = 0;
-      token_expect_integer_arg(type);
-      token_expect_seperator(',');
-      token_expect_integer_arg(addr);
-      token_expect_seperator(',');
-      token_expect_integer_arg(kind);
-      if (command == 'Z') {
-        ret = dbg_sys_set_bw_point(state, addr, type, kind);
-      } else {
-        ret = dbg_sys_rst_bw_point(state, addr, type, kind);
-      }
-      if (ret) {
-        dbg_send_packet(state, NULL, 0);
-      } else {
-        dbg_send_packet(state, "OK", 2);
-      }
-      break;
+  case 'Z':
+  case 'z': {
+    char command = *rd_ptr++;
+    int type = 0;
+    int kind = 0;
+    int ret = 0;
+    token_expect_integer_arg(type);
+    token_expect_seperator(',');
+    token_expect_integer_arg(addr);
+    token_expect_seperator(',');
+    token_expect_integer_arg(kind);
+    if (command == 'Z') {
+      ret = dbg_sys_set_bw_point(state, addr, type, kind);
+    } else {
+      ret = dbg_sys_rst_bw_point(state, addr, type, kind);
     }
-
-    case 'H': {
-      char command = *++rd_ptr;
-      if (command == 'c' || command == 'g') {
-        dbg_send_packet(state, "OK", 2);
-      } else {
-        dbg_send_error_packet(state, pkt_buf, sizeof(pkt_buf), 0x00);
-      }
-      break;
-    }
-
-    case 'A':
+    if (ret) {
+      dbg_send_packet(state, NULL, 0);
+    } else {
       dbg_send_packet(state, "OK", 2);
-      break;
+    }
+    break;
+  }
 
-    case 'q':
-      rd_ptr++;
-      if (dbg_strcmp(rd_ptr, "RegisterInfo") == 0) {
-        int regno;
-        rd_ptr += 12;
-        token_expect_integer_arg(regno);
-        if (regno >= 0 && regno < DBG_CPU_NUM_REGISTERS) {
-          dbg_strcpy(pkt_buf, dbg_sys_get_reginfo(state, regno));
-          dbg_send_packet(state, pkt_buf, dbg_strlen(pkt_buf));
-        } else {
-          dbg_send_error_packet(state, pkt_buf, sizeof(pkt_buf), 0x45);
-        }
-      } else if (dbg_strcmp(rd_ptr, "Supported") == 0) {
-        wr_ptr = pkt_buf;
-        dbg_strcpy(wr_ptr, "PacketSize=");
-        wr_ptr += dbg_strlen("PacketSize=");
-        dbg_itoa(1024, wr_ptr, 10);
-        wr_ptr = pkt_buf + dbg_strlen(pkt_buf);
-        dbg_strcpy(wr_ptr, ";multiprocess+");
-        dbg_send_packet(state, pkt_buf, dbg_strlen(pkt_buf));
-      } else if (dbg_strcmp(rd_ptr, "fThreadInfo") == 0) {
-        // TODO: multiple threads
-        dbg_send_packet(state, "m1", 2);
-      } else if (dbg_strcmp(rd_ptr, "sThreadInfo") == 0) {
-        // TODO: multiple threads
-        dbg_send_packet(state, "l", 1);
-      } else if (dbg_strcmp(rd_ptr, "C") == 0) {
-        wr_ptr = pkt_buf;
-        dbg_strcpy(wr_ptr, "QC");
-        wr_ptr = pkt_buf + dbg_strlen(pkt_buf);
-        dbg_itoa(1, wr_ptr, 10);
-        dbg_send_packet(state, pkt_buf, dbg_strlen(pkt_buf));
-      } else if (dbg_strcmp(rd_ptr, "HostInfo") == 0) {
-        wr_ptr = pkt_buf;
-        dbg_strcpy(pkt_buf, "triple:");
-        wr_ptr += 7;
-        wr_ptr += dbg_enc_hex(wr_ptr, 64, dbg_sys_get_triple(state), dbg_strlen(dbg_sys_get_triple(state)));
-        *wr_ptr++ = ';';
-        dbg_strcpy(wr_ptr, "ptrsize:4;endian:little;");
+  case 'H': {
+    char command = *++rd_ptr;
+    if (command == 'c' || command == 'g') {
+      dbg_send_packet(state, "OK", 2);
+    } else {
+      dbg_send_error_packet(state, pkt_buf, sizeof(pkt_buf), 0x00);
+    }
+    break;
+  }
+
+  case 'A':
+    dbg_send_packet(state, "OK", 2);
+    break;
+
+  case 'Q':
+    rd_ptr++;
+    if (dbg_strcmp(rd_ptr, "StartNoAckMode") == 0) {
+      dbg_send_packet(state, NULL, 0);
+    } else {
+      dbg_send_packet(state, NULL, 0);
+    }
+    break;
+
+  case 'q':
+    rd_ptr++;
+    if (dbg_strcmp(rd_ptr, "RegisterInfo") == 0) {
+      int regno;
+      rd_ptr += 12;
+      token_expect_integer_arg(regno);
+      if (regno >= 0 && regno < DBG_CPU_NUM_REGISTERS) {
+        dbg_strcpy(pkt_buf, dbg_sys_get_reginfo(state, regno));
         dbg_send_packet(state, pkt_buf, dbg_strlen(pkt_buf));
       } else {
-        dbg_send_packet(state, NULL, 0);
+        dbg_send_error_packet(state, pkt_buf, sizeof(pkt_buf), 0x45);
       }
-      break;
+    } else if (dbg_strcmp(rd_ptr, "Supported") == 0) {
+      wr_ptr = pkt_buf;
+      dbg_strcpy(wr_ptr, "PacketSize=");
+      wr_ptr += dbg_strlen("PacketSize=");
+      dbg_itoa(1024, wr_ptr, 10);
+      wr_ptr = pkt_buf + dbg_strlen(pkt_buf);
+      dbg_strcpy(wr_ptr, ";multiprocess+");
+      dbg_send_packet(state, pkt_buf, dbg_strlen(pkt_buf));
+    } else if (dbg_strcmp(rd_ptr, "fThreadInfo") == 0) {
+      // TODO: multiple threads
+      dbg_send_packet(state, "m1", 2);
+    } else if (dbg_strcmp(rd_ptr, "sThreadInfo") == 0) {
+      // TODO: multiple threads
+      dbg_send_packet(state, "l", 1);
+    } else if (dbg_strcmp(rd_ptr, "C") == 0) {
+      wr_ptr = pkt_buf;
+      dbg_strcpy(wr_ptr, "QC");
+      wr_ptr = pkt_buf + dbg_strlen(pkt_buf);
+      dbg_itoa(1, wr_ptr, 10);
+      dbg_send_packet(state, pkt_buf, dbg_strlen(pkt_buf));
+    } else if (dbg_strcmp(rd_ptr, "HostInfo") == 0) {
+      wr_ptr = pkt_buf;
+      dbg_strcpy(pkt_buf, "triple:");
+      wr_ptr += 7;
+      wr_ptr += dbg_enc_hex(wr_ptr, 64, dbg_sys_get_triple(state), dbg_strlen(dbg_sys_get_triple(state)));
+      *wr_ptr++ = ';';
+      dbg_strcpy(wr_ptr, "ptrsize:4;endian:little;");
+      dbg_send_packet(state, pkt_buf, dbg_strlen(pkt_buf));
+    } else {
+      dbg_send_packet(state, NULL, 0);
+    }
+    break;
 
-    case 'v':
-      if (dbg_strcmp(pkt_buf, "vCont?") == 0) {
-        dbg_strcpy(pkt_buf, "vCont;c;s");
-        dbg_send_packet(state, pkt_buf, dbg_strlen(pkt_buf));
-      } else if (dbg_strcmp(pkt_buf, "vCont;") == 0) {
-        char command;
-        rd_ptr += dbg_strlen("vCont;");
-        command = *rd_ptr++;
-        if (command == 'c') {
-          dbg_sys_continue(state);
-        } else if (command == 's') {
-          dbg_sys_step(state);
-        }
-        dbg_send_signal_packet(state, pkt_buf, sizeof(pkt_buf), dbg_sys_get_signum(state));
-      } else {
-        dbg_send_packet(state, NULL, 0);
+  case 'v':
+    if (dbg_strcmp(pkt_buf, "vCont?") == 0) {
+      dbg_strcpy(pkt_buf, "vCont;c;s");
+      dbg_send_packet(state, pkt_buf, dbg_strlen(pkt_buf));
+    } else if (dbg_strcmp(pkt_buf, "vCont;") == 0) {
+      char command;
+      rd_ptr += dbg_strlen("vCont;");
+      command = *rd_ptr++;
+      if (command == 'c') {
+        dbg_sys_continue(state);
+      } else if (command == 's') {
+        dbg_sys_step(state);
       }
-      break;
+      dbg_send_signal_packet(state, pkt_buf, sizeof(pkt_buf), dbg_sys_get_signum(state));
+    } else {
+      dbg_send_packet(state, NULL, 0);
+    }
+    break;
     /*
      * Unsupported Command
      */
-    default:
-      dbg_send_packet(state, NULL, 0);
-    }
-
-    continue;
-
-  error:
-    dbg_send_error_packet(state, pkt_buf, sizeof(pkt_buf), 0x00);
-
-    #undef token_remaining_buf
-    #undef token_expect_seperator
-    #undef token_expect_integer_arg
+  default:
+    dbg_send_packet(state, NULL, 0);
+    break;
   }
+  return 0;
+
+ error:
+  dbg_send_error_packet(state, pkt_buf, sizeof(pkt_buf), 0x00);
+
+#undef token_remaining_buf
+#undef token_expect_seperator
+#undef token_expect_integer_arg
 
   return 0;
 }
