@@ -962,7 +962,6 @@ int dbg_main(struct dbg_state *state)
      */
   case 'c':
     dbg_sys_continue(state);
-    dbg_send_signal_packet(state, pkt_buf, sizeof(pkt_buf), dbg_sys_get_signum(state));
     break;
 
     /*
@@ -971,7 +970,6 @@ int dbg_main(struct dbg_state *state)
      */
   case 's':
     dbg_sys_step(state);
-    dbg_send_signal_packet(state, pkt_buf, sizeof(pkt_buf), dbg_sys_get_signum(state));
     break;
 
   case '?':
@@ -1096,7 +1094,6 @@ int dbg_main(struct dbg_state *state)
       } else if (command == 's') {
         dbg_sys_step(state);
       }
-      dbg_send_signal_packet(state, pkt_buf, sizeof(pkt_buf), dbg_sys_get_signum(state));
     } else {
       dbg_send_packet(state, NULL, 0);
     }
